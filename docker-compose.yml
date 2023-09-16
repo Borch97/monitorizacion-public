@@ -1,0 +1,139 @@
+version: '3'
+
+
+services:
+
+#########################################################
+####                   MONITORING                    ####
+#########################################################
+
+  # Runs on your node(s) and forwards node(host) metrics to Prometheus.
+  master-nodeexporter:
+    image: prom/node-exporter:v1.4.0
+    expose:
+       - 9100
+    #container_name: node-exporter
+    restart: always
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    labels:
+      container_group: monitoring
+    # logging:
+    #   driver: gelf
+    #   options:
+    #     gelf-address: udp://172.16.0.38:12201
+    #     labels: container_group
+
+#########################################################
+
+  # Runs on your node(s) and forwards container metrics to Prometheus.
+  master-cadvisor:
+    image: google/cadvisor:v0.33.0
+    expose:
+      - 8080
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: always
+    labels:
+      container_group: monitoring
+    # logging:
+    #   driver: gelf
+    #   options:
+    #     gelf-address: udp://172.16.0.38:12201
+    #     labels: container_group
+
+
+#########################################################
+
+  # Storage and search backend. Gets all metrics from cAdvisor and Nodeexporter and is the backend that Grafana runs on.
+  prometheus:
+    image: prom/prometheus:v2.40.3
+    expose:
+      - 9090
+    volumes:
+      - ../storage/prometheus:/prometheus:rw
+      #Will/23.08.16: dcom restart prometheus suffices to load config/rule changes
+      #Qyao/07.10.17: curl -X POST http://localhost:9090/-/reload to reload config
+      # it will be safe to mount ./prometheus folder in recent prometheus image  
+      - ./prometheus:/etc/prometheus:rw
+    restart: always
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.listen-address=:9090"
+      #- "--alertmanager.url=http://alertmanager:9093"
+      #- "--storage.local.memory-chunks=300000"
+      #- "--storage.local.retention=744h"
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.path=/prometheus'
+    user: root
+    labels:
+      container_group: monitoring
+    # logging:
+    #   driver: gelf
+    #   options:
+    #     gelf-address: udp://172.16.0.38:12201
+    #     labels: container_group
+
+
+#########################################################
+
+  # Alerting plugin wrapping Prometheus and taking care of your metric alerting needs.
+  alertmanager:
+    image: prom/alertmanager:v0.24.0
+    expose:
+      - 9093
+    restart: always
+    volumes:
+      - ./alertmanager/:/etc/alertmanager/
+      - ../storage/alertmanager/:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+    labels:
+      container_group: monitoring
+    # logging:
+    #   driver: gelf
+    #   options:
+    #     gelf-address: udp://172.16.0.38:12201
+    #     labels: container_group
+
+
+#########################################################
+  blackboxprober:
+    image: prom/blackbox-exporter:v0.22.0
+    volumes:
+      - ./blackboxprober:/etc/blackbox_exporter
+    ports:
+      - 9115:9115
+    restart: always
+    labels:
+      container_group: monitoring
+    # logging:
+    #   driver: gelf
+    #   options:
+    #     gelf-address: udp://172.16.0.38:12201
+    #     labels: container_group
+
+#########################################################
+####                   Networking                    ####
+#########################################################
+
+    
+
+# Extra-network is necessary to have a dedicated IP for Logstash to forwards log to.
+networks:
+  default:
+    external:
+      name: monitoring_logging
